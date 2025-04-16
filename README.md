@@ -54,3 +54,87 @@ if __name__ == "__main__":
     root = tk.Tk()
     chat_box = AIChatBox(root)
     root.mainloop()
+    # chatbot.py
+import os
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import gradio as gr
+import pickle
+
+# Load model and tokenizer
+MODEL_NAME = "microsoft/DialoGPT-medium"
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
+
+# Device config
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = model.to(device)
+
+# Memory file
+MEMORY_FILE = "chat_memory.pkl"
+if os.path.exists(MEMORY_FILE):
+    with open(MEMORY_FILE, "rb") as f:
+        chat_history_ids = pickle.load(f)
+else:
+    chat_history_ids = None
+
+def chatbot_response(user_input, chat_memory=None):
+    global chat_history_ids
+
+    # Encode input
+    new_input_ids = tokenizer.encode(user_input + tokenizer.eos_token, return_tensors="pt").to(device)
+
+    # Append history
+    if chat_history_ids is not None:
+        bot_input_ids = torch.cat([chat_history_ids, new_input_ids], dim=-1)
+    else:
+        bot_input_ids = new_input_ids
+
+    # Generate response
+    chat_history_ids = model.generate(
+        bot_input_ids,
+        max_length=1000,
+        pad_token_id=tokenizer.eos_token_id,
+        temperature=0.7,
+        top_k=50,
+        top_p=0.9,
+    )
+
+    # Decode
+    response = tokenizer.decode(chat_history_ids[:, bot_input_ids.shape[-1]:][0], skip_special_tokens=True)
+
+    # Save chat memory
+    with open(MEMORY_FILE, "wb") as f:
+        pickle.dump(chat_history_ids, f)
+
+    return response
+
+# Reset memory
+def reset_chat():
+    global chat_history_ids
+    chat_history_ids = None
+    if os.path.exists(MEMORY_FILE):
+        os.remove(MEMORY_FILE)
+    return "Chat reset."
+
+# Gradio UI
+with gr.Blocks() as demo:
+    gr.Markdown("## 🤖 Simple AI Chatbot using DialoGPT")
+    
+    with gr.Row():
+        with gr.Column(scale=8):
+            chatbot_output = gr.Textbox(lines=5, label="Chatbot Response")
+        with gr.Column(scale=4):
+            reset_button = gr.Button("🔄 Reset Chat")
+
+    with gr.Row():
+        user_input = gr.Textbox(placeholder="Type your message here...", label="You")
+        submit_button = gr.Button("Send")
+
+    # Functional link
+    submit_button.click(fn=chatbot_response, inputs=user_input, outputs=chatbot_output)
+    reset_button.click(fn=reset_chat, outputs=chatbot_output)
+
+# Launch interface
+demo.launch()
+
